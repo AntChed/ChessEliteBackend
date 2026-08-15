@@ -77,6 +77,74 @@ async function createAnonymousPlayer() {
   return response.body;
 }
 
+async function createActiveGame() {
+  const white = await createAnonymousPlayer();
+  const black = await createAnonymousPlayer();
+
+  const createdGame = await request('/api/games', {
+    headers: authHeader(white.token),
+    method: 'POST',
+  });
+  assert.equal(createdGame.status, 201);
+
+  const createdGameBody = asObject(createdGame.body.game);
+  const gameId = String(createdGameBody.id);
+  const joinCode = String(createdGameBody.joinCode);
+  createdGameIds.push(gameId);
+
+  const joinedGame = await request('/api/games/join', {
+    body: { joinCode },
+    headers: authHeader(black.token),
+    method: 'POST',
+  });
+  assert.equal(joinedGame.status, 200);
+
+  return {
+    black,
+    gameId,
+    white,
+  };
+}
+
+async function forceGameFen(gameId: string, fen: string) {
+  assert.notEqual(pool, null);
+
+  await pool!.query(
+    `
+      UPDATE games
+      SET fen = $2,
+          status = 'ACTIVE',
+          result = NULL,
+          winner_player_id = NULL,
+          finished_at = NULL,
+          updated_at = NOW(),
+          version = version + 1
+      WHERE id = $1
+    `,
+    [gameId, fen],
+  );
+}
+
+async function playTestMove({
+  from,
+  gameId,
+  promotion,
+  token,
+  to,
+}: {
+  from: string;
+  gameId: string;
+  promotion?: string;
+  token: string;
+  to: string;
+}) {
+  return request(`/api/games/${gameId}/moves`, {
+    body: { from, moveId: randomUUID(), promotion, to },
+    headers: authHeader(token),
+    method: 'POST',
+  });
+}
+
 async function cleanupCreatedRows() {
   if (!pool) {
     return;
@@ -340,5 +408,90 @@ test(
     assert.equal(finalGame.status, 'FINISHED');
     assert.equal(finalGame.result, 'CHECKMATE');
     assert.equal(finalGame.winnerPlayerId, black.player.id);
+  },
+);
+
+test(
+  'REST accepts promotion, en passant, and castling as authoritative legal moves',
+  { skip: shouldRunIntegrationTests ? false : 'DATABASE_URL and JWT_SECRET are required' },
+  async () => {
+    const promotionGame = await createActiveGame();
+    await forceGameFen(promotionGame.gameId, '7k/P7/8/8/8/8/8/4K3 w - - 0 1');
+
+    const promotionMove = await playTestMove({
+      from: 'a7',
+      gameId: promotionGame.gameId,
+      promotion: 'q',
+      to: 'a8',
+      token: promotionGame.white.token,
+    });
+    assert.equal(promotionMove.status, 201);
+    assert.equal(asObject(promotionMove.body.move).san, 'a8=Q+');
+    assert.match(String(asObject(promotionMove.body.game).fen), /^Q6k\//);
+    assert.equal(asObject(promotionMove.body.game).status, 'ACTIVE');
+
+    const enPassantGame = await createActiveGame();
+    await forceGameFen(enPassantGame.gameId, '4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1');
+
+    const enPassantMove = await playTestMove({
+      from: 'e5',
+      gameId: enPassantGame.gameId,
+      to: 'd6',
+      token: enPassantGame.white.token,
+    });
+    assert.equal(enPassantMove.status, 201);
+    assert.equal(asObject(enPassantMove.body.move).san, 'exd6');
+    assert.match(String(asObject(enPassantMove.body.game).fen), /^4k3\/8\/3P4\/8\//);
+    assert.equal(asObject(enPassantMove.body.game).status, 'ACTIVE');
+
+    const castlingGame = await createActiveGame();
+    await forceGameFen(castlingGame.gameId, 'r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1');
+
+    const castlingMove = await playTestMove({
+      from: 'e1',
+      gameId: castlingGame.gameId,
+      to: 'g1',
+      token: castlingGame.white.token,
+    });
+    assert.equal(castlingMove.status, 201);
+    assert.equal(asObject(castlingMove.body.move).san, 'O-O');
+    assert.match(String(asObject(castlingMove.body.game).fen), /^r3k2r\/8\/8\/8\/8\/8\/8\/R4RK1 b kq/);
+    assert.equal(asObject(castlingMove.body.game).status, 'ACTIVE');
+  },
+);
+
+test(
+  'REST stores stalemate and draw as final online results',
+  { skip: shouldRunIntegrationTests ? false : 'DATABASE_URL and JWT_SECRET are required' },
+  async () => {
+    const stalemateGame = await createActiveGame();
+    await forceGameFen(stalemateGame.gameId, '7k/5K2/8/6Q1/8/8/8/8 w - - 0 1');
+
+    const stalemateMove = await playTestMove({
+      from: 'g5',
+      gameId: stalemateGame.gameId,
+      to: 'g6',
+      token: stalemateGame.white.token,
+    });
+    assert.equal(stalemateMove.status, 201);
+    assert.equal(asObject(stalemateMove.body.move).san, 'Qg6');
+    assert.equal(asObject(stalemateMove.body.game).status, 'FINISHED');
+    assert.equal(asObject(stalemateMove.body.game).result, 'STALEMATE');
+    assert.equal(asObject(stalemateMove.body.game).winnerPlayerId, null);
+
+    const drawGame = await createActiveGame();
+    await forceGameFen(drawGame.gameId, '7k/8/8/8/8/8/8/4K2R w - - 99 150');
+
+    const drawMove = await playTestMove({
+      from: 'h1',
+      gameId: drawGame.gameId,
+      to: 'h2',
+      token: drawGame.white.token,
+    });
+    assert.equal(drawMove.status, 201);
+    assert.equal(asObject(drawMove.body.move).san, 'Rh2+');
+    assert.equal(asObject(drawMove.body.game).status, 'FINISHED');
+    assert.equal(asObject(drawMove.body.game).result, 'DRAW');
+    assert.equal(asObject(drawMove.body.game).winnerPlayerId, null);
   },
 );
