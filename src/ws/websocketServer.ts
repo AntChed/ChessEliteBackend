@@ -148,8 +148,38 @@ export function attachWebSocketServer(server: Server) {
   });
   const rooms = new Map<string, Set<AuthenticatedSocket>>();
 
+  function roomHasPlayer(room: Set<AuthenticatedSocket> | undefined, playerId: string) {
+    if (!room) {
+      return false;
+    }
+
+    for (const roomSocket of room) {
+      if (roomSocket.player?.id === playerId) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function broadcastToOtherPlayers(gameId: string, playerId: string, message: ServerMessage) {
+    const room = rooms.get(gameId);
+
+    if (!room) {
+      return;
+    }
+
+    for (const roomSocket of room) {
+      if (roomSocket.player?.id !== playerId) {
+        send(roomSocket, message);
+      }
+    }
+  }
+
   function joinRoom(socket: AuthenticatedSocket, gameId: string) {
     let room = rooms.get(gameId);
+    const playerId = socket.player?.id;
+    const wasPlayerInRoom = playerId ? roomHasPlayer(room, playerId) : false;
 
     if (!room) {
       room = new Set();
@@ -158,12 +188,22 @@ export function attachWebSocketServer(server: Server) {
 
     room.add(socket);
     socket.joinedGameIds?.add(gameId);
+
+    return !wasPlayerInRoom;
   }
 
   function leaveAllRooms(socket: AuthenticatedSocket) {
     for (const gameId of socket.joinedGameIds ?? []) {
       const room = rooms.get(gameId);
       room?.delete(socket);
+
+      if (socket.player && !roomHasPlayer(room, socket.player.id)) {
+        broadcastToOtherPlayers(gameId, socket.player.id, {
+          gameId,
+          playerId: socket.player.id,
+          type: 'PLAYER_DISCONNECTED',
+        });
+      }
 
       if (room?.size === 0) {
         rooms.delete(gameId);
@@ -178,13 +218,24 @@ export function attachWebSocketServer(server: Server) {
       return;
     }
 
+    const connectedPlayerIds = Array.from(
+      new Set(
+        Array.from(room)
+          .map((roomSocket) => roomSocket.player?.id)
+          .filter((playerId): playerId is string => Boolean(playerId)),
+      ),
+    );
+
     for (const socket of room) {
       if (!socket.player) {
         continue;
       }
 
       send(socket, {
-        game: presentGameState(game, socket.player.id),
+        game: {
+          ...presentGameState(game, socket.player.id),
+          connectedPlayerIds,
+        },
         type: 'GAME_STATE',
       });
     }
@@ -193,7 +244,7 @@ export function attachWebSocketServer(server: Server) {
   function broadcastGameFinished(game: Game) {
     const room = rooms.get(game.id);
 
-    if (!room || !game.winnerPlayerId) {
+    if (!room) {
       return;
     }
 
@@ -205,7 +256,7 @@ export function attachWebSocketServer(server: Server) {
       send(socket, {
         game: presentGameState(game, socket.player.id),
         gameId: game.id,
-        result: 'RESIGNATION',
+        result: game.result,
         type: 'GAME_FINISHED',
         winnerPlayerId: game.winnerPlayerId,
       });
@@ -260,13 +311,22 @@ export function attachWebSocketServer(server: Server) {
       return;
     }
 
-    joinRoom(socket, game.id);
+    const playerWasOffline = joinRoom(socket, game.id);
 
     for (const roomSocket of rooms.get(game.id) ?? []) {
       send(roomSocket, {
         gameId: game.id,
+        nickname: socket.player.nickname,
         playerId: socket.player.id,
         type: 'PLAYER_JOINED',
+      });
+    }
+
+    if (playerWasOffline) {
+      broadcastToOtherPlayers(game.id, socket.player.id, {
+        gameId: game.id,
+        playerId: socket.player.id,
+        type: 'PLAYER_RECONNECTED',
       });
     }
 
@@ -319,7 +379,11 @@ export function attachWebSocketServer(server: Server) {
       type: 'MOVE_ACCEPTED',
     });
 
-    publishGameStateUpdated(result.game);
+    if (result.game.status === 'FINISHED') {
+      publishGameFinished(result.game);
+    } else {
+      publishGameStateUpdated(result.game);
+    }
   }
 
   async function handleResign(socket: AuthenticatedSocket, message: Extract<ClientMessage, { type: 'RESIGN' }>) {

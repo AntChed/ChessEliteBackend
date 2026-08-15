@@ -12,7 +12,9 @@ const maxJoinCodeAttempts = 8;
 
 type GameRow = {
   black_nickname: string | null;
+  black_piece_skin: string | null;
   black_player_id: string | null;
+  board_skin: string | null;
   created_at: Date;
   fen: string;
   id: string;
@@ -22,6 +24,7 @@ type GameRow = {
   updated_at: Date;
   version: number;
   white_nickname: string;
+  white_piece_skin: string | null;
   white_player_id: string;
   winner_player_id: string | null;
 };
@@ -92,6 +95,8 @@ function toGame(row: GameRow): Game {
         }
       : null,
     blackPlayerId: row.black_player_id,
+    blackPieceSkinId: row.black_piece_skin,
+    boardSkinId: row.board_skin,
     createdAt: row.created_at,
     fen: row.fen,
     id: row.id,
@@ -105,6 +110,7 @@ function toGame(row: GameRow): Game {
       nickname: row.white_nickname,
     },
     whitePlayerId: row.white_player_id,
+    whitePieceSkinId: row.white_piece_skin,
     winnerPlayerId: row.winner_player_id,
   };
 }
@@ -117,8 +123,11 @@ async function fetchGameById(client: PoolClient, gameId: string) {
         g.join_code,
         g.white_player_id,
         white_player.nickname AS white_nickname,
+        g.white_piece_skin,
         g.black_player_id,
         black_player.nickname AS black_nickname,
+        g.black_piece_skin,
+        g.board_skin,
         g.status,
         g.fen,
         g.version,
@@ -176,7 +185,7 @@ async function resolveDuplicateMove(
   };
 }
 
-export async function createGame(whitePlayerId: string): Promise<Game> {
+export async function createGame(whitePlayerId: string, whitePieceSkinId: string | null = null): Promise<Game> {
   const databasePool = requirePool();
 
   for (let attempt = 0; attempt < maxJoinCodeAttempts; attempt += 1) {
@@ -187,11 +196,11 @@ export async function createGame(whitePlayerId: string): Promise<Game> {
 
       const insertResult = await client.query<{ id: string }>(
         `
-          INSERT INTO games (id, join_code, white_player_id, status, fen)
-          VALUES ($1, $2, $3, 'WAITING', $4)
+          INSERT INTO games (id, join_code, white_player_id, white_piece_skin, board_skin, status, fen)
+          VALUES ($1, $2, $3, $4, $5, 'WAITING', $6)
           RETURNING id
         `,
-        [randomUUID(), createJoinCode(), whitePlayerId, initialFen],
+        [randomUUID(), createJoinCode(), whitePlayerId, whitePieceSkinId, whitePieceSkinId, initialFen],
       );
 
       const game = await fetchGameById(client, insertResult.rows[0].id);
@@ -228,7 +237,11 @@ export async function findGameById(gameId: string): Promise<Game | null> {
   }
 }
 
-export async function joinGameByCode(joinCode: string, playerId: string): Promise<JoinGameResult> {
+export async function joinGameByCode(
+  joinCode: string,
+  playerId: string,
+  blackPieceSkinId: string | null = null,
+): Promise<JoinGameResult> {
   const client = await requirePool().connect();
 
   try {
@@ -275,13 +288,14 @@ export async function joinGameByCode(joinCode: string, playerId: string): Promis
       `
         UPDATE games
         SET black_player_id = $2,
+            black_piece_skin = $3,
             status = 'ACTIVE',
             started_at = NOW(),
             updated_at = NOW(),
             version = version + 1
         WHERE id = $1
       `,
-      [lockedGame.id, playerId],
+      [lockedGame.id, playerId, blackPieceSkinId],
     );
 
     const game = await fetchGameById(client, lockedGame.id);

@@ -269,7 +269,7 @@ test(
     const black = await createAnonymousPlayer();
     const gameId = await createActiveGame(white, black);
     const whiteSocket = await openTestSocket(white.token);
-    const blackSocket = await openTestSocket(black.token);
+    let blackSocket = await openTestSocket(black.token);
 
     try {
       whiteSocket.send({ type: 'PING' });
@@ -284,6 +284,21 @@ test(
       await whiteSocket.waitFor('PLAYER_JOINED', (message) => message.playerId === black.player.id);
       const blackInitialState = await blackSocket.waitFor('GAME_STATE');
       assert.equal(asObject(blackInitialState.game).color, 'black');
+
+      await blackSocket.close();
+      const disconnectedBlack = await whiteSocket.waitFor(
+        'PLAYER_DISCONNECTED',
+        (message) => message.playerId === black.player.id,
+      );
+      assert.equal(disconnectedBlack.gameId, gameId);
+
+      blackSocket = await openTestSocket(black.token);
+      blackSocket.send({ gameId, type: 'JOIN_GAME' });
+      const reconnectedBlack = await whiteSocket.waitFor(
+        'PLAYER_RECONNECTED',
+        (message) => message.playerId === black.player.id,
+      );
+      assert.equal(reconnectedBlack.gameId, gameId);
 
       const wrongTurnMoveId = randomUUID();
       blackSocket.send({

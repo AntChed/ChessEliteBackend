@@ -10,14 +10,34 @@ import { isValidJoinCode, normalizeJoinCode } from './joinCode.js';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const squarePattern = /^[a-h][1-8]$/;
 const promotionPattern = /^[bnqr]$/;
+const cosmeticIdPattern = /^[A-Za-z0-9_-]{1,64}$/;
 
 export const gameRouter = Router();
 
 gameRouter.use(requireAuth);
 
+function normalizeCosmeticId(value: unknown) {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  return typeof value === 'string' ? value.trim() : null;
+}
+
+function validateCosmeticId(value: string | null) {
+  return value === null || cosmeticIdPattern.test(value);
+}
+
 gameRouter.post('/', async (request, response, next) => {
+  const chessSkinId = normalizeCosmeticId(request.body?.chessSkinId);
+
+  if (!validateCosmeticId(chessSkinId)) {
+    sendApiError(response, 400, 'INVALID_COSMETIC', 'Cosmetic selection is invalid');
+    return;
+  }
+
   try {
-    const game = await createGame(request.player!.id);
+    const game = await createGame(request.player!.id, chessSkinId);
 
     response.status(201).json({
       game: presentGameSummary(game, request.player!.id),
@@ -29,14 +49,20 @@ gameRouter.post('/', async (request, response, next) => {
 
 gameRouter.post('/join', async (request, response, next) => {
   const joinCode = normalizeJoinCode(request.body?.joinCode);
+  const chessSkinId = normalizeCosmeticId(request.body?.chessSkinId);
 
   if (!isValidJoinCode(joinCode)) {
     sendApiError(response, 400, 'INVALID_JOIN_CODE', 'Join code is invalid');
     return;
   }
 
+  if (!validateCosmeticId(chessSkinId)) {
+    sendApiError(response, 400, 'INVALID_COSMETIC', 'Cosmetic selection is invalid');
+    return;
+  }
+
   try {
-    const result = await joinGameByCode(joinCode, request.player!.id);
+    const result = await joinGameByCode(joinCode, request.player!.id, chessSkinId);
 
     if (result.status === 'not_found') {
       sendApiError(response, 404, 'GAME_NOT_FOUND', 'Game not found');
@@ -165,7 +191,11 @@ gameRouter.post('/:gameId/moves', async (request, response, next) => {
       move: result.move,
     });
 
-    publishGameStateUpdated(result.game);
+    if (result.game.status === 'FINISHED') {
+      publishGameFinished(result.game);
+    } else {
+      publishGameStateUpdated(result.game);
+    }
   } catch (error) {
     next(error);
   }

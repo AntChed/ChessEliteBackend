@@ -17,6 +17,8 @@ export type GameParticipant = Pick<Player, 'id' | 'nickname'>;
 export type Game = {
   black: GameParticipant | null;
   blackPlayerId: string | null;
+  blackPieceSkinId: string | null;
+  boardSkinId: string | null;
   createdAt: Date;
   fen: string;
   id: string;
@@ -27,6 +29,6 @@ export type Game = {
   version: number;
   white: GameParticipant;
   whitePlayerId: string;
+  whitePieceSkinId: string | null;
   winnerPlayerId: string | null;
 };
-

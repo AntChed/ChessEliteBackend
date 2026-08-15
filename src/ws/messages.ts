@@ -1,3 +1,5 @@
+import type { GameResult } from '../games/game.types.js';
+
 export type ClientMessage =
   | { gameId: string; type: 'JOIN_GAME' }
   | {
@@ -28,14 +30,25 @@ export type ServerMessage =
   | {
       gameId: string;
       playerId: string;
+      nickname?: string;
       type: 'PLAYER_JOINED';
+    }
+  | {
+      gameId: string;
+      playerId: string;
+      type: 'PLAYER_DISCONNECTED';
+    }
+  | {
+      gameId: string;
+      playerId: string;
+      type: 'PLAYER_RECONNECTED';
     }
   | {
       game: unknown;
       gameId: string;
-      result: 'RESIGNATION';
+      result: GameResult | null;
       type: 'GAME_FINISHED';
-      winnerPlayerId: string;
+      winnerPlayerId: string | null;
     }
   | {
       duplicate: boolean;

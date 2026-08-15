@@ -9,6 +9,7 @@ export type ApiErrorCode =
   | 'GAME_FULL'
   | 'GAME_NOT_FOUND'
   | 'GAME_NOT_WAITING'
+  | 'INVALID_COSMETIC'
   | 'INVALID_GAME_ID'
   | 'INVALID_JOIN_CODE'
   | 'INVALID_MOVE'

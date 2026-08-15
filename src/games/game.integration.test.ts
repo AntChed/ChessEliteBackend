@@ -169,6 +169,7 @@ test(
     assert.equal(asObject(invalidJoin.body.error).code, 'INVALID_JOIN_CODE');
 
     const createdGame = await request('/api/games', {
+      body: { chessSkinId: 'obsidian' },
       headers: authHeader(white.token),
       method: 'POST',
     });
@@ -181,6 +182,7 @@ test(
 
     assert.equal(createdGameBody.status, 'WAITING');
     assert.equal(createdGameBody.color, 'white');
+    assert.equal(createdGameBody.whitePieceSkinId, 'obsidian');
     assert.match(joinCode, /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/);
 
     const forbiddenGame = await request(`/api/games/${gameId}`, {
@@ -190,13 +192,14 @@ test(
     assert.equal(asObject(forbiddenGame.body.error).code, 'FORBIDDEN');
 
     const joinedGame = await request('/api/games/join', {
-      body: { joinCode: joinCode.toLowerCase() },
+      body: { chessSkinId: 'ivoryRoyal', joinCode: joinCode.toLowerCase() },
       headers: authHeader(black.token),
       method: 'POST',
     });
     assert.equal(joinedGame.status, 200);
     assert.equal(asObject(joinedGame.body.game).status, 'ACTIVE');
     assert.equal(asObject(joinedGame.body.game).color, 'black');
+    assert.equal(asObject(joinedGame.body.game).blackPieceSkinId, 'ivoryRoyal');
 
     const activeGame = await request(`/api/games/${gameId}`, {
       headers: authHeader(white.token),
@@ -208,6 +211,8 @@ test(
     assert.equal(activeGameBody.turn, 'white');
     assert.equal(asObject(activeGameBody.white).nickname, 'EvaMobile');
     assert.equal(asObject(activeGameBody.black).id, black.player.id);
+    assert.equal(activeGameBody.whitePieceSkinId, 'obsidian');
+    assert.equal(activeGameBody.blackPieceSkinId, 'ivoryRoyal');
 
     const thirdJoin = await request('/api/games/join', {
       body: { joinCode },
@@ -285,5 +290,55 @@ test(
     });
     assert.equal(moveAfterResign.status, 409);
     assert.equal(asObject(moveAfterResign.body.error).code, 'GAME_NOT_ACTIVE');
+  },
+);
+
+test(
+  'REST stores checkmate as the final online result',
+  { skip: shouldRunIntegrationTests ? false : 'DATABASE_URL and JWT_SECRET are required' },
+  async () => {
+    const white = await createAnonymousPlayer();
+    const black = await createAnonymousPlayer();
+
+    const createdGame = await request('/api/games', {
+      headers: authHeader(white.token),
+      method: 'POST',
+    });
+    assert.equal(createdGame.status, 201);
+
+    const createdGameBody = asObject(createdGame.body.game);
+    const gameId = String(createdGameBody.id);
+    const joinCode = String(createdGameBody.joinCode);
+    createdGameIds.push(gameId);
+
+    const joinedGame = await request('/api/games/join', {
+      body: { joinCode },
+      headers: authHeader(black.token),
+      method: 'POST',
+    });
+    assert.equal(joinedGame.status, 200);
+
+    const moves = [
+      { from: 'f2', token: white.token, to: 'f3' },
+      { from: 'e7', token: black.token, to: 'e5' },
+      { from: 'g2', token: white.token, to: 'g4' },
+      { from: 'd8', token: black.token, to: 'h4' },
+    ];
+    let finalMove: TestResponse | null = null;
+
+    for (const move of moves) {
+      finalMove = await request(`/api/games/${gameId}/moves`, {
+        body: { from: move.from, moveId: randomUUID(), to: move.to },
+        headers: authHeader(move.token),
+        method: 'POST',
+      });
+      assert.equal(finalMove.status, 201);
+    }
+
+    assert.notEqual(finalMove, null);
+    const finalGame = asObject(finalMove!.body.game);
+    assert.equal(finalGame.status, 'FINISHED');
+    assert.equal(finalGame.result, 'CHECKMATE');
+    assert.equal(finalGame.winnerPlayerId, black.player.id);
   },
 );
