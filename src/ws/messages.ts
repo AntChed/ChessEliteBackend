@@ -11,11 +11,62 @@ export type ClientMessage =
   | { gameId: string; type: 'RESIGN' }
   | { type: 'PING' };
 
+export type MoveRejectedReason =
+  | 'DUPLICATE_MOVE_ID'
+  | 'GAME_FINISHED'
+  | 'INVALID_MOVE'
+  | 'NOT_YOUR_TURN'
+  | 'OUT_OF_SYNC'
+  | 'PLAYER_NOT_IN_GAME';
+
 export type ServerMessage =
   | { type: 'PONG' }
   | {
+      game: unknown;
+      type: 'GAME_STATE';
+    }
+  | {
+      gameId: string;
+      playerId: string;
+      type: 'PLAYER_JOINED';
+    }
+  | {
+      game: unknown;
+      gameId: string;
+      result: 'RESIGNATION';
+      type: 'GAME_FINISHED';
+      winnerPlayerId: string;
+    }
+  | {
+      duplicate: boolean;
+      fen: string;
+      from: string;
+      gameId: string;
+      moveId: string;
+      san: string;
+      to: string;
+      turn: 'black' | 'white';
+      type: 'MOVE_ACCEPTED';
+    }
+  | {
+      gameState?: {
+        fen: string;
+        turn: 'black' | 'white';
+      };
+      gameId?: string;
+      moveId?: string;
+      reason: MoveRejectedReason;
+      type: 'MOVE_REJECTED';
+    }
+  | {
       error: {
-        code: 'NOT_IMPLEMENTED' | 'INVALID_MESSAGE';
+        code:
+          | 'FORBIDDEN'
+          | 'GAME_NOT_ACTIVE'
+          | 'GAME_NOT_FOUND'
+          | 'INVALID_MESSAGE'
+          | 'NOT_IMPLEMENTED'
+          | 'UNAUTHORIZED';
         message: string;
       };
       type: 'ERROR';
@@ -24,4 +75,3 @@ export type ServerMessage =
 export function serializeServerMessage(message: ServerMessage) {
   return JSON.stringify(message);
 }
-

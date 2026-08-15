@@ -1,9 +1,26 @@
 import type { ErrorRequestHandler, Request, Response } from 'express';
 
 export type ApiErrorCode =
+  | 'AUTH_NOT_CONFIGURED'
+  | 'DATABASE_NOT_CONFIGURED'
+  | 'DUPLICATE_MOVE_ID'
+  | 'FORBIDDEN'
+  | 'GAME_NOT_ACTIVE'
+  | 'GAME_FULL'
+  | 'GAME_NOT_FOUND'
+  | 'GAME_NOT_WAITING'
+  | 'INVALID_GAME_ID'
+  | 'INVALID_JOIN_CODE'
+  | 'INVALID_MOVE'
+  | 'INVALID_MOVE_ID'
+  | 'INVALID_NICKNAME'
   | 'INTERNAL_ERROR'
   | 'NOT_FOUND'
-  | 'NOT_IMPLEMENTED';
+  | 'NOT_IMPLEMENTED'
+  | 'PLAYER_ALREADY_IN_GAME'
+  | 'PLAYER_NOT_IN_GAME'
+  | 'NOT_YOUR_TURN'
+  | 'UNAUTHORIZED';
 
 export type ApiErrorResponse = {
   error: {
@@ -26,7 +43,16 @@ export function notFoundHandler(request: Request, response: Response) {
 }
 
 export const errorHandler: ErrorRequestHandler = (error, _request, response, _next) => {
+  if (error instanceof Error && error.message.startsWith('DATABASE_URL is required')) {
+    sendApiError(response, 503, 'DATABASE_NOT_CONFIGURED', error.message);
+    return;
+  }
+
+  if (error instanceof Error && error.message === 'JWT_SECRET is required') {
+    sendApiError(response, 503, 'AUTH_NOT_CONFIGURED', error.message);
+    return;
+  }
+
   console.error(error);
   sendApiError(response, 500, 'INTERNAL_ERROR', 'Internal server error');
 };
-
