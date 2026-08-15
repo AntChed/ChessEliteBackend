@@ -153,4 +153,79 @@ GAME_FINISHED
 ERROR
 ```
 
+## Railway deployment preparation
+
+This backend is ready for Railway config-as-code through `railway.json`.
+
+Railway uses:
+
+```text
+Build command: npm run build
+Pre-deploy command: npm run migrate:deploy
+Start command: npm run start
+Healthcheck path: /health
+```
+
+Required Railway variables:
+
+```text
+NODE_ENV=production
+DATABASE_URL=<Railway PostgreSQL connection string>
+JWT_SECRET=<strong random secret>
+```
+
+Generate `JWT_SECRET` locally:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+Deployment checklist:
+
+1. Create or select the Railway project.
+2. Add a PostgreSQL service.
+3. Connect the `ChessEliteBackend` Git repository as a Railway service.
+4. Ensure the service root is the repository root. If deploying from a monorepo instead, set the root directory to `/ChessEliteBackend`.
+5. Add the variables above.
+6. Deploy. Railway will build, run migrations with `npm run migrate:deploy`, start the API, then call `/health`.
+7. Generate a public Railway domain for the backend service.
+8. Verify:
+
+```powershell
+Invoke-RestMethod -Uri https://<railway-domain>/health
+Invoke-RestMethod -Uri https://<railway-domain>/api
+```
+
+Expected production health response:
+
+```json
+{
+  "auth": "ok",
+  "database": "ok",
+  "status": "ok"
+}
+```
+
+For mobile Expo/Railway testing:
+
+```powershell
+cd ChessElite
+$env:EXPO_PUBLIC_CHESS_ELITE_API_URL="https://<railway-domain>"
+npm start
+```
+
+For an APK, rebuild after setting the variable because `EXPO_PUBLIC_CHESS_ELITE_API_URL` is embedded at build time:
+
+```powershell
+cd ChessElite
+$env:EXPO_PUBLIC_CHESS_ELITE_API_URL="https://<railway-domain>"
+npm run android:apk
+```
+
+The mobile app derives WebSocket automatically from the same URL:
+
+```text
+https://... -> wss://...
+```
+
 The multiplayer REST and WebSocket protocol will be implemented incrementally from `MULTIPLAYER_ONLINE_V1_SPEC.md`.
