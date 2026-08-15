@@ -7,6 +7,7 @@ import { publishGameFinished, publishGameStateUpdated, subscribeGameEvents } fro
 import { findGameById, playMove, resignGame } from '../games/game.repository.js';
 import { getPlayerColor, presentGameState } from '../games/game.presenter.js';
 import type { Game } from '../games/game.types.js';
+import { logInfo, logWarn } from '../logging/logger.js';
 import { findPlayerById, touchPlayerLastSeen } from '../players/player.repository.js';
 import type { Player } from '../players/player.types.js';
 import type { ClientMessage, MoveRejectedReason, ServerMessage } from './messages.js';
@@ -14,12 +15,20 @@ import { serializeServerMessage } from './messages.js';
 
 type AuthenticatedSocket = WebSocket & {
   joinedGameIds?: Set<string>;
+  messageWindow?: {
+    count: number;
+    resetAt: number;
+  };
   player?: Player;
 };
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const squarePattern = /^[a-h][1-8]$/;
 const promotions = new Set(['b', 'n', 'q', 'r']);
+const socketMessageRateLimit = {
+  maxMessages: 120,
+  windowMs: 10 * 1000,
+};
 
 type Promotion = 'b' | 'n' | 'q' | 'r';
 
@@ -27,6 +36,22 @@ function send(socket: WebSocket, message: ServerMessage) {
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(serializeServerMessage(message));
   }
+}
+
+function consumeSocketMessage(socket: AuthenticatedSocket) {
+  const now = Date.now();
+  const window =
+    socket.messageWindow && socket.messageWindow.resetAt > now
+      ? socket.messageWindow
+      : {
+          count: 0,
+          resetAt: now + socketMessageRateLimit.windowMs,
+        };
+
+  window.count += 1;
+  socket.messageWindow = window;
+
+  return window.count <= socketMessageRateLimit.maxMessages;
 }
 
 function readToken(request: IncomingMessage) {
@@ -198,6 +223,11 @@ export function attachWebSocketServer(server: Server) {
       room?.delete(socket);
 
       if (socket.player && !roomHasPlayer(room, socket.player.id)) {
+        logInfo('PLAYER_DISCONNECTED', {
+          gameId,
+          playerId: socket.player.id,
+        });
+
         broadcastToOtherPlayers(gameId, socket.player.id, {
           gameId,
           playerId: socket.player.id,
@@ -323,6 +353,11 @@ export function attachWebSocketServer(server: Server) {
     }
 
     if (playerWasOffline) {
+      logInfo('PLAYER_RECONNECTED', {
+        gameId: game.id,
+        playerId: socket.player.id,
+      });
+
       broadcastToOtherPlayers(game.id, socket.player.id, {
         gameId: game.id,
         playerId: socket.player.id,
@@ -334,12 +369,28 @@ export function attachWebSocketServer(server: Server) {
   }
 
   async function handleMove(socket: AuthenticatedSocket, message: Extract<ClientMessage, { type: 'MOVE' }>) {
+    logInfo('MOVE_RECEIVED', {
+      from: message.from,
+      gameId: message.gameId,
+      moveId: message.moveId,
+      playerId: socket.player?.id,
+      to: message.to,
+      transport: 'ws',
+    });
+
     if (
       !uuidPattern.test(message.gameId) ||
       !uuidPattern.test(message.moveId) ||
       !squarePattern.test(message.from) ||
       !squarePattern.test(message.to)
     ) {
+      logWarn('MOVE_REJECTED', {
+        gameId: message.gameId,
+        moveId: message.moveId,
+        playerId: socket.player?.id,
+        reason: 'invalid_payload',
+        transport: 'ws',
+      });
       await sendRejectedMove(socket, message.gameId, message.moveId, 'INVALID_MOVE');
       return;
     }
@@ -363,9 +414,25 @@ export function attachWebSocketServer(server: Server) {
     });
 
     if (result.status !== 'played' && result.status !== 'duplicate') {
+      logWarn('MOVE_REJECTED', {
+        gameId: message.gameId,
+        moveId: message.moveId,
+        playerId: socket.player.id,
+        reason: result.status,
+        transport: 'ws',
+      });
       await sendRejectedMove(socket, message.gameId, message.moveId, toMoveRejectedReason(result.status));
       return;
     }
+
+    logInfo('MOVE_ACCEPTED', {
+      duplicate: result.status === 'duplicate',
+      gameId: result.game.id,
+      moveId: message.moveId,
+      playerId: socket.player.id,
+      result: result.game.status === 'FINISHED' ? result.game.result : undefined,
+      transport: 'ws',
+    });
 
     send(socket, {
       duplicate: result.status === 'duplicate',
@@ -380,6 +447,12 @@ export function attachWebSocketServer(server: Server) {
     });
 
     if (result.game.status === 'FINISHED') {
+      logInfo('GAME_FINISHED', {
+        gameId: result.game.id,
+        result: result.game.result,
+        transport: 'ws',
+        winnerPlayerId: result.game.winnerPlayerId,
+      });
       publishGameFinished(result.game);
     } else {
       publishGameStateUpdated(result.game);
@@ -412,6 +485,12 @@ export function attachWebSocketServer(server: Server) {
     const result = await resignGame(message.gameId, socket.player.id);
 
     if (result.status === 'not_found') {
+      logWarn('GAME_RESIGN_REJECTED', {
+        gameId: message.gameId,
+        playerId: socket.player.id,
+        reason: result.status,
+        transport: 'ws',
+      });
       send(socket, {
         error: {
           code: 'GAME_NOT_FOUND',
@@ -423,6 +502,12 @@ export function attachWebSocketServer(server: Server) {
     }
 
     if (result.status === 'not_participant') {
+      logWarn('GAME_RESIGN_REJECTED', {
+        gameId: message.gameId,
+        playerId: socket.player.id,
+        reason: result.status,
+        transport: 'ws',
+      });
       send(socket, {
         error: {
           code: 'FORBIDDEN',
@@ -434,6 +519,12 @@ export function attachWebSocketServer(server: Server) {
     }
 
     if (result.status === 'not_active') {
+      logWarn('GAME_RESIGN_REJECTED', {
+        gameId: message.gameId,
+        playerId: socket.player.id,
+        reason: result.status,
+        transport: 'ws',
+      });
       send(socket, {
         error: {
           code: 'GAME_NOT_ACTIVE',
@@ -443,6 +534,14 @@ export function attachWebSocketServer(server: Server) {
       });
       return;
     }
+
+    logInfo('GAME_FINISHED', {
+      gameId: result.game.id,
+      playerId: socket.player.id,
+      result: result.game.result,
+      transport: 'ws',
+      winnerPlayerId: result.game.winnerPlayerId,
+    });
 
     publishGameFinished(result.game);
   }
@@ -497,6 +596,22 @@ export function attachWebSocketServer(server: Server) {
     }
 
     socket.on('message', (rawMessage) => {
+      if (!consumeSocketMessage(socket)) {
+        logWarn('WS_RATE_LIMITED', {
+          playerId: socket.player?.id,
+        });
+
+        send(socket, {
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'Too many WebSocket messages',
+          },
+          type: 'ERROR',
+        });
+        socket.close(1008, 'Rate limited');
+        return;
+      }
+
       if (!isAuthenticated) {
         pendingMessages.push(rawMessage);
         return;

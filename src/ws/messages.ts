@@ -79,6 +79,7 @@ export type ServerMessage =
           | 'GAME_NOT_FOUND'
           | 'INVALID_MESSAGE'
           | 'NOT_IMPLEMENTED'
+          | 'RATE_LIMITED'
           | 'UNAUTHORIZED';
         message: string;
       };

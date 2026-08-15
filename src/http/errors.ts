@@ -1,5 +1,7 @@
 import type { ErrorRequestHandler, Request, Response } from 'express';
 
+import { logError } from '../logging/logger.js';
+
 export type ApiErrorCode =
   | 'AUTH_NOT_CONFIGURED'
   | 'DATABASE_NOT_CONFIGURED'
@@ -20,6 +22,7 @@ export type ApiErrorCode =
   | 'NOT_IMPLEMENTED'
   | 'PLAYER_ALREADY_IN_GAME'
   | 'PLAYER_NOT_IN_GAME'
+  | 'RATE_LIMITED'
   | 'NOT_YOUR_TURN'
   | 'UNAUTHORIZED';
 
@@ -54,6 +57,8 @@ export const errorHandler: ErrorRequestHandler = (error, _request, response, _ne
     return;
   }
 
-  console.error(error);
+  logError('INTERNAL_ERROR', {
+    message: error instanceof Error ? error.message : 'Unknown error',
+  });
   sendApiError(response, 500, 'INTERNAL_ERROR', 'Internal server error');
 };

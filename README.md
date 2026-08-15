@@ -28,6 +28,10 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 
 `npm run migrate` requires `DATABASE_URL`. It creates a `schema_migrations` table and applies each SQL file in `src/db/migrations` once, inside a transaction.
 
+`ALLOWED_ORIGINS` is optional. Leave it empty for Expo Go, APKs, and local development. If a browser client is added later, set a comma-separated allowlist such as `https://example.com,https://admin.example.com`.
+
+The API applies in-memory rate limits to anonymous player creation, profile updates, game creation, joins, moves, resignations, and WebSocket messages. Rate-limited REST calls return `429 RATE_LIMITED` with a `Retry-After` header. Runtime logs are emitted as JSON events and never include bearer tokens.
+
 Example local `.env`:
 
 ```bash
@@ -35,6 +39,7 @@ NODE_ENV=development
 PORT=3000
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/chess_elite
 JWT_SECRET=replace-this-with-a-generated-secret
+ALLOWED_ORIGINS=
 ```
 
 ## Local PostgreSQL test flow
@@ -172,6 +177,7 @@ Required Railway variables:
 NODE_ENV=production
 DATABASE_URL=<Railway PostgreSQL connection string>
 JWT_SECRET=<strong random secret>
+ALLOWED_ORIGINS=
 ```
 
 Generate `JWT_SECRET` locally:
